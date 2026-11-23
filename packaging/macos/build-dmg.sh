@@ -5,9 +5,12 @@ root=$(dirname "$(dirname "$here")")
 bundle=${1:-"$root/dist/HiFine.app"}
 out=${2:-"$root/release"}
 test -x "$bundle/Contents/MacOS/HiFine"
+version=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$bundle/Contents/Info.plist")
 extension="$bundle/Contents/PlugIns/HiFineThumbnail.appex"
 mkdir -p "$extension/Contents/MacOS" "$out"
 cp "$here/Extension.plist" "$extension/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set CFBundleVersion $version" "$extension/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set CFBundleShortVersionString $version" "$extension/Contents/Info.plist"
 xcrun clang -O2 -fobjc-arc -fblocks -fapplication-extension -mmacosx-version-min=14.0 \
     -framework Foundation -framework QuickLookThumbnailing -framework CoreGraphics -framework ImageIO \
     -Wl,-e,_NSExtensionMain "$here/ThumbnailProvider.m" -o "$extension/Contents/MacOS/HiFineThumbnail"
@@ -18,4 +21,4 @@ stage=$(mktemp -d)
 trap 'rm -rf -- "$stage"' EXIT
 ditto "$bundle" "$stage/HiFine.app"
 ln -s /Applications "$stage/Applications"
-hdiutil create -ov -format UDZO -volname HiFine -srcfolder "$stage" "$out/HiFine-0.1.0-macOS-$(uname -m).dmg"
+hdiutil create -ov -format UDZO -volname HiFine -srcfolder "$stage" "$out/HiFine-$version-macOS-$(uname -m).dmg"

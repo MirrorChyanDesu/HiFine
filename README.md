@@ -15,7 +15,7 @@ HiFine 是 Windows、macOS 和 Linux 上的桌面图片查看器。双击打开�
 | macOS 14 及以上，Apple 芯片 | [HiFine-0.1.0-macOS-arm64.dmg](https://github.com/MistEO/HiFine/releases/download/v0.1.0/HiFine-0.1.0-macOS-arm64.dmg) |
 | macOS 14 及以上，Intel 处理器 | [HiFine-0.1.0-macOS-x86_64.dmg](https://github.com/MistEO/HiFine/releases/download/v0.1.0/HiFine-0.1.0-macOS-x86_64.dmg) |
 
-四个安装包的 SHA-256 校验值见发布附件。[SHA256SUMS.txt](https://github.com/MistEO/HiFine/releases/download/v0.1.0/SHA256SUMS.txt)
+安装包及 HEIF 组件源码包的 SHA-256 校验值见发布附件。[SHA256SUMS.txt](https://github.com/MistEO/HiFine/releases/download/v0.1.0/SHA256SUMS.txt)
 
 ### 安装与双击打开
 
@@ -70,4 +70,12 @@ python -m pytest -q
 | Ubuntu 24.04 | `sh packaging/linux/build-deb.sh` | dpkg-deb |
 | macOS | `sh packaging/macos/build-dmg.sh` | Xcode Command Line Tools |
 
-macOS 脚本生成与构建机架构一致的 DMG。仓库的发布工作流通过版本标签构建并上传这四个安装包及校验文件。
+macOS 脚本生成与构建机架构一致的 DMG。
+
+## 发布新版本
+
+同步更新 `pyproject.toml` 和 `src/hifine/__init__.py` 的版本号，在 `docs/releases/v<版本>.md` 中写好变更和下载说明，并更新上方的下载链接。将修改合并至 `main`，待 Desktop builds 的四项平台构建通过，在这一提交上创建并推送 `v<版本>` 标签。
+
+标签会触发正式构建。工作流收齐四个安装包、生成对应的 HEIF 组件源码包和 SHA-256 清单，将附件上传到草稿 Release，并核对 GitHub 记录的每个文件摘要。全部一致后才会公开该版本。[发布工作流](.github/workflows/desktop.yml)
+
+HiFine 源码采用 MIT 许可证。随安装包分发的 Qt、Python 运行时和图像编解码组件适用各自的许可，安装包也附有许可文本及对应源码入口。[项目许可](LICENSE) · [第三方组件与源码](packaging/licenses/THIRD-PARTY.txt)

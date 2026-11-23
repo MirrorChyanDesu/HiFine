@@ -109,6 +109,9 @@ jobs:
           subprocess.run(["qlmanage", "-t", "-s", "256", "-o", folder, sample], timeout=60, check=True)
           with Image.open(next(folder.glob("*.png"))) as thumbnail:
               assert max(thumbnail.size) >= 128
+      - name: Open a registered HIF document through macOS Launch Services
+        if: runner.os == 'macOS'
+        run: swift tests/macos/open_photo.swift "$PWD/dist/HiFine.app" "$PWD"/src/hifine/assets/samples/*.hif
       - uses: actions/upload-artifact@v4
         with:
           name: HiFine-${{ matrix.os }}
@@ -129,6 +132,11 @@ jobs:
           pattern: HiFine-*
           path: installers
           merge-multiple: true
+      - name: Include the HEIF codec sources
+        run: |
+          python3 packaging/build_heif_sources.py
+          python3 packaging/build_heif_sources.py --verify release/*-heif-sources.zip
+          mv release/*-heif-sources.zip installers/
       - name: Verify version and generate checksums
         env:
           TAG: ${{ github.ref_name }}
@@ -144,6 +152,7 @@ jobs:
           root = Path("installers")
           expected = {f"HiFine-{version}-{suffix}" for suffix in (
               "windows-x64-setup.exe", "linux-amd64.deb", "macOS-arm64.dmg", "macOS-x86_64.dmg",
+              "heif-sources.zip",
           )}
           assert {p.name for p in root.iterdir()} == expected, "Incomplete or unexpected release assets"
           sums = []
@@ -166,7 +175,7 @@ jobs:
             gh release create "$TAG" --draft --verify-tag --title "HiFine $TAG" --notes-file "$notes"
           fi
           gh release upload "$TAG" installers/* --clobber
-          (cd installers && sha256sum *) | sort -k2 > "$RUNNER_TEMP/expected"
+          (cd installers && sha256sum -- *) | sort -k2 > "$RUNNER_TEMP/expected"
           gh release view "$TAG" --json assets --jq '.assets[] | [(.digest | sub("^sha256:"; "")), .name] | join("  ")' | sort -k2 > "$RUNNER_TEMP/uploaded"
           diff -u "$RUNNER_TEMP/expected" "$RUNNER_TEMP/uploaded"
           gh release edit "$TAG" --draft=false --latest --notes-file "$notes"

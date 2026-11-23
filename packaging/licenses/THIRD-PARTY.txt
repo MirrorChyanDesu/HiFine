@@ -1,0 +1,43 @@
+HiFine and its bundled components
+
+HiFine's application source is © 2026 MistEO and is licensed under the MIT
+License. See HiFine/LICENSE. The binary distributions include the following
+third-party components under their own terms.
+
+HEIF support
+
+pillow-heif 1.8.1 source is BSD-3-Clause. Its upstream binary wheel is marked
+GPLv2 because it includes x265. It also carries libheif 1.23.6 and libde265
+1.1.3 under LGPLv3. The distributed x265 4.3 release records revision e9b8812.
+See GPL-2.0.txt, LGPL-3.0.txt, GPL-3.0.txt and the wheel's LICENSES_bundled.txt
+in pillow_heif-1.8.1.dist-info/licenses. Windows runtime notices include the
+GCC Runtime Library Exception and MinGW-w64/winpthreads terms.
+
+Each HiFine release provides its HEIF source ZIP beside its installers:
+https://github.com/MistEO/HiFine/releases
+The ZIP includes upstream source releases, wheel recipes, platform build
+instructions and the MSYS2 x265 patch. Original sources and build files:
+https://github.com/bigcat88/pillow_heif/tree/v1.8.1
+https://github.com/bigcat88/pillow_heif/blob/v1.8.1/libheif/build_libs.py
+https://github.com/bigcat88/pillow_heif/tree/v1.8.1/libheif/windows
+https://github.com/strukturag/libheif/releases/tag/v1.23.6
+https://github.com/strukturag/libde265/releases/tag/v1.1.3
+https://github.com/Multicorewareinc/x265/releases/tag/4.3
+
+Desktop interface
+
+HiFine uses the Qt 6.12.0 shared libraries, PySide6 Essentials 6.12.0 and
+Shiboken 6.12.0 from The Qt Company and contributors. HiFine uses the
+open-source LGPLv3 distribution option. The Qt libraries are distributed as
+shared objects. The LGPLv3 and GPLv3 license texts accompany this notice.
+Corresponding framework and binding sources, including build instructions:
+https://download.qt.io/official_releases/qt/6.12/6.12.0/single/qt-everywhere-src-6.12.0.tar.xz
+https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.12.0-src/pyside-setup-everywhere-src-6.12.0.tar.xz
+
+Imaging, Python and launcher
+
+Pillow's license file includes notices for its platform-specific bundled image
+libraries, in pillow-13.0.0.dist-info/licenses. The interpreter's license is
+in CPython/LICENSE.txt. The launcher and runtime hook terms, including the
+PyInstaller bootloader exception, are in pyinstaller-6.22.3.dist-info/licenses.
+The sample photograph's credit and source are in hifine/assets/NOTICE.txt.

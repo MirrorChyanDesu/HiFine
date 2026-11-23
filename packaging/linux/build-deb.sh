@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+version=$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb"))["project"]["version"])' "$root/pyproject.toml")
 bundle=${1:-"$root/dist/HiFine"}
 out=${2:-"$root/release"}
 test -x "$bundle/HiFine"
@@ -16,7 +17,7 @@ install -Dm644 "$root/src/hifine/assets/HiFine.png" "$stage/usr/share/icons/hico
 arch=$(dpkg --print-architecture)
 cat > "$stage/DEBIAN/control" <<EOF
 Package: hifine
-Version: 0.1.0
+Version: $version
 Architecture: $arch
 Maintainer: HiFine contributors
 Section: graphics
@@ -26,4 +27,4 @@ Recommends: fonts-noto-cjk | fonts-wqy-microhei
 Description: Desktop image viewer with built-in HEIF decoding
  View photos, inspect EXIF metadata and browse camera HIF files.
 EOF
-dpkg-deb --root-owner-group -Zxz -z4 --build "$stage" "$out/HiFine-0.1.0-linux-$arch.deb"
+dpkg-deb --root-owner-group -Zxz -z4 --build "$stage" "$out/HiFine-$version-linux-$arch.deb"
