@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hifine"
+version = "0.1.0"
+description = "Desktop image viewer with built-in HEIF support"
+requires-python = ">=3.11,<3.16"
+dependencies = [
+    "PySide6-Essentials==6.12.0",
+    "Pillow==13.0.0",
+    "pillow-heif==1.8.1",
+]
+
+[project.optional-dependencies]
+build = ["pyinstaller==6.22.3"]
+test = ["pytest>=8,<10"]
+
+[project.gui-scripts]
+hifine = "hifine.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+hifine = ["assets/*.png", "assets/*.txt", "assets/samples/*.hif"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

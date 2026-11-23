@@ -1,0 +1,4 @@
+LIBRARY HiFineThumbnail
+EXPORTS
+    DllCanUnloadNow PRIVATE
+    DllGetClassObject PRIVATE

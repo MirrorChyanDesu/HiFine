@@ -1,0 +1,473 @@
+"""HiFine's desktop window and image navigation."""
+
+from pathlib import Path
+
+from PySide6.QtCore import (
+    QDir, QObject, QRunnable, QSize, QStandardPaths, Qt, QThreadPool, QTimer, Signal, Slot,
+)
+from PySide6.QtGui import QColorSpace, QGuiApplication, QImage, QKeySequence, QMovie, QShortcut, QTransform
+from PySide6.QtWidgets import (
+    QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
+    QPushButton, QStackedWidget, QVBoxLayout, QWidget,
+)
+
+from .canvas import ImageCanvas
+from .controls import ElidedLabel, InfoPanel, divider, glyph, tool_button
+from .imaging import SUPPORTED_EXTENSIONS, list_images, load_image
+
+
+STYLE = """
+QWidget { color: #eeeae4; font-size: 13px; }
+QFrame#header, QFrame#footer, QFrame#panel, QWidget#infoContent, QScrollArea {
+    background: #232426;
+}
+QWidget#state { background: #18191b; }
+QFrame#divider { background: #38383a; border: none; }
+QLabel#brand { font-family: 'Inter', 'Segoe UI', sans-serif; font-size: 24px;
+    font-weight: 700; letter-spacing: -1px; color: #faf8f4; }
+QLabel#location, QLabel#position, QLabel#metaKey { color: #a19e99; }
+QLabel#location, QLabel#position, QLabel#metaValue, QLabel#metaKey { font-size: 12px; }
+QLabel#panelTitle, QLabel#stateTitle { font-size: 17px; font-weight: 600; }
+QLabel#keyHint { padding: 1px 5px; font-size: 11px; color: #a8a59e;
+    border: 1px solid #504e4c; border-radius: 4px; }
+QLabel#sectionTitle { font-size: 12px; font-weight: 600; color: #f1bc86; }
+QLabel#metaValue, QLabel#filename { color: #dfddd8; }
+QLabel#stateDescription { color: #a8a5a0; }
+QToolButton, QPushButton { background: transparent; color: #e5e1da; border: 1px solid transparent;
+    border-radius: 5px; padding: 3px; }
+QToolButton:hover, QPushButton:hover { background: #38383a; }
+QToolButton:pressed, QPushButton:pressed { background: #454443; }
+QToolButton:checked { background: #42362c; border-color: #624b37; }
+QToolButton#open, QPushButton#open { background: #f0b47b; color: #251c14; font-weight: 600;
+    padding: 5px 12px; border: 1px solid #f1bd8b; }
+QToolButton#open:hover, QPushButton#open:hover { background: #fac58f; }
+QToolButton#open:pressed, QPushButton#open:pressed { background: #dea16a; }
+QPushButton#zoom { color: #e6e3dd; padding: 3px 5px; font-size: 12px; font-weight: 600; }
+QPushButton#zoom:disabled { color: #77736f; }
+QScrollBar:vertical { background: #232426; width: 6px; }
+QScrollBar::handle:vertical { background: #515052; min-height: 26px; border-radius: 3px; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+QToolTip { background: #343436; color: #efeee9; border: 1px solid #595756; padding: 4px; }
+"""
+
+
+class _ReadSignals(QObject):
+    finished = Signal(object, object, QImage, object, str)
+
+
+class _ReadImage(QRunnable):
+    def __init__(self, path, scan):
+        super().__init__()
+        self.path = path
+        self.scan = scan
+        self.signals = _ReadSignals()
+
+    def run(self):
+        siblings = None
+        if self.scan:
+            try:
+                siblings = list_images(self.path.parent)
+            except OSError:
+                siblings = []
+            if self.path not in siblings:
+                siblings = [self.path]
+        image = QImage()
+        details = {}
+        error = ""
+        try:
+            loaded = load_image(self.path)
+            pixels = loaded.image
+            fmt = (QImage.Format.Format_RGBA8888 if pixels.mode == "RGBA"
+                   else QImage.Format.Format_RGB888)
+            stride = pixels.width * len(pixels.getbands())
+            image = QImage(pixels.tobytes(), pixels.width, pixels.height, stride, fmt).copy()
+            if image.isNull():
+                raise ValueError("图片尺寸过大，无法分配显示内存。")
+            details = loaded.metadata
+        except Exception as exc:
+            error = str(exc) or "请检查图片是否完整，再重新打开。"
+        self.signals.finished.emit(self.path, siblings, image, details, error)
+
+
+class MainWindow(QMainWindow):
+    def __init__(self, sample_path=None):
+        super().__init__()
+        self.setWindowTitle("HiFine")
+        self.setAcceptDrops(True)
+        self.setMinimumSize(600, 380)
+        screen = QGuiApplication.primaryScreen()
+        available = screen.availableGeometry().size() if screen else QSize(1280, 800)
+        self.resize(min(1200, int(available.width() * 0.90)),
+                    min(800, int(available.height() * 0.90)))
+        self.sample_path = Path(sample_path).absolute() if sample_path else None
+        self.current_path = None
+        self.files = []
+        self._index = -1
+        self._reader = None
+        self._pending = None
+        self._movie = None
+        self._movie_orientation = 1
+        self._pool = QThreadPool(self)
+        QApplication.instance().aboutToQuit.connect(self._pool.waitForDone)
+        self._loading_hint = QTimer(self)
+        self._loading_hint.setSingleShot(True)
+        self._loading_hint.setInterval(150)
+        self._loading_hint.timeout.connect(self._show_loading)
+        self._had_maximized = False
+        self._has_image = False
+        self._setup_view()
+        self._setup_shortcuts()
+        self._show_state("打开一张图片", "也可以将图片拖到这里。", open_button=True)
+        self._update_navigation()
+
+    def _setup_view(self):
+        root = QWidget()
+        root.setObjectName("root")
+        root.setStyleSheet(STYLE)
+        self.setCentralWidget(root)
+        layout = QVBoxLayout(root)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        header = QFrame()
+        header.setObjectName("header")
+        header.setFixedHeight(62)
+        top = QHBoxLayout(header)
+        top.setContentsMargins(20, 0, 18, 0)
+        top.setSpacing(8)
+        logo = QLabel()
+        app_icon = QApplication.windowIcon()
+        if app_icon.isNull():
+            app_icon = glyph("image", "#f0b47b")
+        logo.setPixmap(app_icon.pixmap(QSize(30, 30), self.devicePixelRatioF()))
+        top.addWidget(logo)
+        brand = QLabel("HiFine")
+        brand.setObjectName("brand")
+        top.addWidget(brand)
+        top.addSpacing(11)
+        top.addWidget(divider(True))
+        top.addSpacing(9)
+        self.location = ElidedLabel("location")
+        top.addWidget(self.location, 1)
+        self.open_button = tool_button("folder", "打开图片", self.choose_file,
+                                       text="打开图片", color="#342519")
+        self.open_button.setObjectName("open")
+        self.open_button.setToolTip(f"打开图片（{QKeySequence(QKeySequence.StandardKey.Open).toString(QKeySequence.SequenceFormat.NativeText)}）")
+        top.addWidget(self.open_button)
+        top.addSpacing(5)
+        self.info_button = tool_button("panel", "查看或隐藏照片信息（Tab）",
+                                       self._set_info, checkable=True)
+        self.info_button.setChecked(True)
+        top.addWidget(self.info_button)
+        self.full_button = tool_button("fullscreen", "进入或退出全屏（F11）",
+                                       self._toggle_fullscreen, checkable=True)
+        top.addWidget(self.full_button)
+        layout.addWidget(header)
+        layout.addWidget(divider())
+
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        self.stage = QStackedWidget()
+        self.canvas = ImageCanvas()
+        self.stage.addWidget(self.canvas)
+        self.state = QWidget()
+        self.state.setObjectName("state")
+        state_layout = QVBoxLayout(self.state)
+        state_layout.setContentsMargins(20, 15, 20, 15)
+        state_layout.setSpacing(10)
+        state_layout.addStretch()
+        state_icon = QLabel()
+        state_icon.setPixmap(glyph("image", "#cb9463").pixmap(QSize(36, 36), self.devicePixelRatioF()))
+        state_layout.addWidget(state_icon, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.state_title = QLabel()
+        self.state_title.setObjectName("stateTitle")
+        self.state_description = QLabel()
+        self.state_description.setObjectName("stateDescription")
+        self.state_description.setTextFormat(Qt.TextFormat.PlainText)
+        self.state_description.setWordWrap(True)
+        self.state_description.setMaximumWidth(420)
+        self.state_description.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        state_layout.addWidget(self.state_title, 0, Qt.AlignmentFlag.AlignHCenter)
+        state_layout.addWidget(self.state_description, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.state_button = QPushButton("打开图片")
+        self.state_button.setObjectName("open")
+        self.state_button.clicked.connect(self.choose_file)
+        state_layout.addWidget(self.state_button, 0, Qt.AlignmentFlag.AlignHCenter)
+        state_layout.addStretch()
+        self.stage.addWidget(self.state)
+        body.addWidget(self.stage, 1)
+        self.panel_divider = QFrame()
+        self.panel_divider.setObjectName("divider")
+        self.panel_divider.setFixedWidth(1)
+        body.addWidget(self.panel_divider)
+        self.info_panel = InfoPanel()
+        self.info_panel.setFixedWidth(264)
+        body.addWidget(self.info_panel)
+        layout.addLayout(body, 1)
+
+        layout.addWidget(divider())
+        footer = QFrame()
+        footer.setObjectName("footer")
+        footer.setFixedHeight(53)
+        bottom = QHBoxLayout(footer)
+        bottom.setContentsMargins(13, 0, 17, 0)
+        bottom.setSpacing(5)
+        self.prev_button = tool_button("left", "上一张（←）", lambda: self.navigate(-1))
+        self.next_button = tool_button("right", "下一张（→）", lambda: self.navigate(1))
+        bottom.addWidget(self.prev_button)
+        self.position = QLabel()
+        self.position.setObjectName("position")
+        self.position.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.position.setMinimumWidth(40)
+        bottom.addWidget(self.position)
+        bottom.addWidget(self.next_button)
+        bottom.addSpacing(7)
+        bottom.addWidget(divider(True))
+        bottom.addSpacing(9)
+        self.filename = ElidedLabel("filename")
+        bottom.addWidget(self.filename, 1)
+        self.play_button = tool_button("pause", "暂停动图（空格）", self._toggle_play)
+        self.play_button.hide()
+        bottom.addWidget(self.play_button)
+        self.minus_button = tool_button("minus", "缩小（−）", lambda: self.canvas.zoom_by(1 / 1.2))
+        bottom.addWidget(self.minus_button)
+        self.zoom_button = QPushButton("100%")
+        self.zoom_button.setObjectName("zoom")
+        self.zoom_button.setFixedWidth(56)
+        self.zoom_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.zoom_button.setToolTip("原始大小（1）")
+        self.zoom_button.setAccessibleName("以原始大小查看")
+        self.zoom_button.clicked.connect(lambda: self.canvas.set_zoom(1.0))
+        bottom.addWidget(self.zoom_button)
+        self.plus_button = tool_button("plus", "放大（+）", lambda: self.canvas.zoom_by(1.2))
+        bottom.addWidget(self.plus_button)
+        bottom.addSpacing(5)
+        bottom.addWidget(divider(True))
+        bottom.addSpacing(6)
+        self.fit_button = tool_button("fit", "适应窗口（0）", self.canvas.fit, checkable=True)
+        bottom.addWidget(self.fit_button)
+        layout.addWidget(footer)
+        self.canvas.zoom_changed.connect(self._set_zoom_label)
+        self._set_zoom_label(self.canvas.zoom(), True)
+
+    def _setup_shortcuts(self):
+        self._shortcuts = []
+
+        def add(sequence, callback):
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.activated.connect(callback)
+            self._shortcuts.append(shortcut)
+
+        add(QKeySequence.StandardKey.Open, self.choose_file)
+        add("Left", lambda: self.navigate(-1))
+        add("Right", lambda: self.navigate(1))
+        add("Tab", lambda: self.info_button.click())
+        add("F11", self._toggle_fullscreen)
+        add("Escape", self._leave_fullscreen)
+        add("Space", self._toggle_play)
+        add("+", lambda: self.canvas.zoom_by(1.2))
+        add("=", lambda: self.canvas.zoom_by(1.2))
+        add("-", lambda: self.canvas.zoom_by(1 / 1.2))
+        add("0", self.canvas.fit)
+        add("1", lambda: self.canvas.set_zoom(1.0))
+
+    def _set_info(self, visible):
+        self.info_panel.setVisible(visible)
+        self.panel_divider.setVisible(visible)
+
+    def _toggle_fullscreen(self):
+        if self.isFullScreen():
+            self._leave_fullscreen()
+        else:
+            self._had_maximized = self.isMaximized()
+            self.showFullScreen()
+            self.full_button.setChecked(True)
+
+    def _leave_fullscreen(self):
+        if self.isFullScreen():
+            if self._had_maximized:
+                self.showMaximized()
+            else:
+                self.showNormal()
+            self.full_button.setChecked(False)
+
+    def _set_zoom_label(self, value, fitting):
+        percentage = value * 100
+        self.zoom_button.setText(f"{percentage:.1f}%" if percentage < 10 else f"{percentage:.0f}%")
+        self.fit_button.setChecked(fitting)
+
+    def _show_state(self, title, description="", open_button=False):
+        self.state_title.setText(title)
+        self.state_description.setText(description)
+        self.state_description.setVisible(bool(description))
+        self.state_button.setVisible(open_button)
+        self.stage.setCurrentWidget(self.state)
+        self._has_image = False
+        self._set_zoom_enabled(False)
+
+    def _set_zoom_enabled(self, enabled):
+        for button in (self.zoom_button, self.fit_button, self.minus_button, self.plus_button):
+            button.setEnabled(enabled)
+
+    def choose_file(self):
+        start = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.PicturesLocation)
+        if self.current_path and not self._is_sample(self.current_path):
+            start = str(self.current_path.parent)
+        patterns = " ".join(f"*{ext} *{ext.upper()}" for ext in sorted(SUPPORTED_EXTENSIONS))
+        path, _ = QFileDialog.getOpenFileName(self, "打开图片", start,
+                                               f"图片文件 ({patterns});;所有文件 (*)")
+        if path:
+            self.open_file(path)
+
+    def open_sample(self):
+        if self.sample_path and self.sample_path.is_file():
+            self.open_file(self.sample_path)
+
+    def _is_sample(self, path):
+        return self.sample_path is not None and self.sample_path.parent == path.parent
+
+    def open_file(self, path):
+        path = Path(path).expanduser().absolute()
+        self.files = [path]
+        self._index = 0
+        self._schedule_read(path, scan=True)
+
+    def navigate(self, step):
+        index = self._index + step
+        if 0 <= index < len(self.files):
+            self._index = index
+            self._schedule_read(self.files[index], scan=False)
+
+    def _schedule_read(self, path, scan):
+        self._stop_animation()
+        self.current_path = path
+        self._update_navigation()
+        if self._has_image:
+            self._loading_hint.start()
+        else:
+            self._show_loading()
+        self._pending = (path, scan)
+        if self._reader is None:
+            self._start_read()
+
+    def _show_path(self, path):
+        self.setWindowTitle(f"{path.name} — HiFine")
+        self.filename.set_full_text(path.name)
+        self.filename.setToolTip(QDir.toNativeSeparators(str(path)))
+        location = "示例照片" if self._is_sample(path) else (path.parent.name or str(path.parent))
+        self.location.set_full_text(location)
+        self.location.setToolTip(QDir.toNativeSeparators(str(path.parent)))
+
+    def _show_loading(self):
+        self._show_path(self.current_path)
+        self.info_panel.set_details(self.current_path, {})
+        self.canvas.set_image(QImage())
+        self._show_state("正在读取图片…")
+
+    def _start_read(self):
+        path, scan = self._pending
+        self._pending = None
+        self._reader = _ReadImage(path, scan)
+        self._reader.signals.finished.connect(self._read_finished)
+        self._pool.start(self._reader)
+
+    @Slot(object, object, QImage, object, str)
+    def _read_finished(self, path, siblings, image, details, error):
+        self._reader = None
+        if self._pending is not None:
+            self._start_read()
+            return
+        self._loading_hint.stop()
+        self._show_path(path)
+        if siblings is not None:
+            self.files = siblings
+            self._index = self.files.index(path)
+        self._update_navigation()
+        self.info_panel.set_details(path, details)
+        if error:
+            self.canvas.set_image(QImage())
+            self._show_state("无法打开这张图片", error, open_button=True)
+        else:
+            self.stage.setCurrentWidget(self.canvas)
+            self._has_image = True
+            self.canvas.set_image(image)
+            self._set_zoom_enabled(True)
+            if details.get("animated"):
+                self._start_animation(path, details.get("animation_orientation", 1))
+
+    def _start_animation(self, path, orientation):
+        movie = QMovie(str(path), parent=self)
+        if not movie.isValid():
+            movie.deleteLater()
+            return
+        self._movie = movie
+        self._movie_orientation = orientation
+        movie.frameChanged.connect(self._show_frame)
+        movie.stateChanged.connect(self._movie_state_changed)
+        movie.error.connect(self._stop_animation)
+        self.play_button.show()
+        movie.start()
+
+    def _stop_animation(self):
+        movie, self._movie = self._movie, None
+        if movie is not None:
+            movie.stop()
+            movie.deleteLater()
+        self.play_button.hide()
+
+    def _show_frame(self):
+        if self._movie is None:
+            return
+        frame = self._movie.currentImage()
+        if frame.isNull():
+            return
+        orientation = self._movie_orientation
+        degrees = {3: 180, 5: 90, 6: 90, 7: 90, 8: -90}.get(orientation)
+        if degrees is not None:
+            frame = frame.transformed(QTransform().rotate(degrees))
+        if orientation in (2, 5):
+            frame = frame.flipped(Qt.Orientation.Horizontal)
+        elif orientation in (4, 7):
+            frame = frame.flipped(Qt.Orientation.Vertical)
+        if frame.colorSpace().isValid():
+            frame = frame.convertedToColorSpace(QColorSpace.NamedColorSpace.SRgb)
+        self.canvas.set_frame(frame)
+
+    def _movie_state_changed(self, state):
+        playing = state == QMovie.MovieState.Running
+        action = "暂停动图（空格）" if playing else "播放动图（空格）"
+        self.play_button.setIcon(glyph("pause" if playing else "play"))
+        self.play_button.setToolTip(action)
+        self.play_button.setAccessibleName(action)
+
+    def _toggle_play(self):
+        if self._movie is None:
+            return
+        state = self._movie.state()
+        if state == QMovie.MovieState.NotRunning:
+            self._movie.start()
+        else:
+            self._movie.setPaused(state == QMovie.MovieState.Running)
+
+    def _update_navigation(self):
+        self.prev_button.setEnabled(self._index > 0)
+        self.next_button.setEnabled(0 <= self._index < len(self.files) - 1)
+        self.position.setText(f"{self._index + 1} / {len(self.files)}" if self.files else "—")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "info_panel"):
+            self.info_panel.setFixedWidth(max(205, min(278, round(self.width() * 0.235))))
+
+    def dragEnterEvent(self, event):
+        if any(url.isLocalFile() and Path(url.toLocalFile()).is_file()
+               for url in event.mimeData().urls()):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        for url in event.mimeData().urls():
+            if url.isLocalFile() and Path(url.toLocalFile()).is_file():
+                self.open_file(url.toLocalFile())
+                event.acceptProposedAction()
+                return

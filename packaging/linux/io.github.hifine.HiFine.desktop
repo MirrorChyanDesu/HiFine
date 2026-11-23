@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=HiFine
+GenericName=Image Viewer
+GenericName[zh_CN]=图片查看器
+Exec=/usr/bin/hifine %f
+Icon=io.github.hifine.HiFine
+Terminal=false
+Categories=Graphics;Viewer;Photography;
+MimeType=image/jpeg;image/png;image/gif;image/webp;image/bmp;image/tiff;image/vnd.microsoft.icon;image/x-icon;image/avif;image/heif;image/heic;image/heif-sequence;image/heic-sequence;
+StartupNotify=true

@@ -1,0 +1,4 @@
+[Thumbnailer Entry]
+TryExec=/usr/bin/hifine
+Exec=/usr/bin/hifine --thumbnail %i %o %s
+MimeType=image/heif;image/heic;image/heif-sequence;image/heic-sequence;image/avif;image/webp;

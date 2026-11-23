@@ -1,0 +1,73 @@
+# HiFine
+
+HiFine 是 Windows、macOS 和 Linux 上的桌面图片查看器。双击打开照片后，可以直接浏览同一文件夹。查看器内置 HIF / HEIF 解码器，可读取相机拍摄的 10 位 HIF 和照片中的 EXIF 信息。
+
+[下载最新版](https://github.com/MistEO/HiFine/releases/latest) · [v0.1.0 发布页](https://github.com/MistEO/HiFine/releases/tag/v0.1.0)
+
+![HiFine 在 Windows 上打开 HIF 样片](docs/preview.webp)
+
+## 下载 v0.1.0
+
+| 系统 | 安装包 |
+| --- | --- |
+| Windows x64 | [HiFine-0.1.0-windows-x64-setup.exe](https://github.com/MistEO/HiFine/releases/download/v0.1.0/HiFine-0.1.0-windows-x64-setup.exe) |
+| Ubuntu 24.04 amd64 | [HiFine-0.1.0-linux-amd64.deb](https://github.com/MistEO/HiFine/releases/download/v0.1.0/HiFine-0.1.0-linux-amd64.deb) |
+| macOS 14 及以上，Apple 芯片 | [HiFine-0.1.0-macOS-arm64.dmg](https://github.com/MistEO/HiFine/releases/download/v0.1.0/HiFine-0.1.0-macOS-arm64.dmg) |
+| macOS 14 及以上，Intel 处理器 | [HiFine-0.1.0-macOS-x86_64.dmg](https://github.com/MistEO/HiFine/releases/download/v0.1.0/HiFine-0.1.0-macOS-x86_64.dmg) |
+
+四个安装包的 SHA-256 校验值见发布附件。[SHA256SUMS.txt](https://github.com/MistEO/HiFine/releases/download/v0.1.0/SHA256SUMS.txt)
+
+### 安装与双击打开
+
+- **Windows**　运行安装程序。安装按当前用户生效。完成后右击一张图片，选择“打开方式”中的 HiFine，并选择始终使用，即可双击打开同一扩展名的图片。也可以从安装完成页进入系统“默认应用”逐项设置。资源管理器使用中图标或更大图标时，可显示 HIF、HEIF、HEIC 缩略图。其他图片由系统已安装的缩略图程序处理。
+- **Ubuntu**　在下载目录运行 `sudo apt install ./HiFine-0.1.0-linux-amd64.deb`。在文件管理器的图片属性中将 HiFine 设为默认应用。安装包还包含供 GNOME Files 和 Thunar 使用的 HEIF 缩略图程序。
+- **macOS**　打开对应芯片的 DMG，将 HiFine 拖入“应用程序”。在 Finder 中选中图片，按 ⌘I，在“打开方式”中选择 HiFine，再点“全部更改”。若不清楚芯片型号，可在苹果菜单的“关于本机”中查看。
+
+macOS 版采用 ad-hoc 本地签名，尚未经 Apple 公证。首次启动如果系统提示无法验证，确认下载来源后可在“系统设置 → 隐私与安全性”中选择“仍要打开”。随包的 Quick Look 扩展使用 macOS ImageIO 解码，Finder 中不同相机 HIF 的缩略图兼容性仍待实机验证。[Apple 的首次打开说明](https://support.apple.com/zh-cn/102445)
+
+## 看图
+
+| 操作 | 快捷方式 |
+| --- | --- |
+| 打开图片 | 拖入窗口，或按 Ctrl+O（macOS 为 ⌘O） |
+| 同文件夹上一张 / 下一张 | ← / →，按文件名自然排序，如 2 在 10 之前 |
+| 缩放 | 滚动鼠标滚轮，以指针所在位置为中心，也可用 + / − |
+| 平移 | 图片超出画布时，按住鼠标左键拖动 |
+| 原始尺寸 / 适应窗口 | 按 1 / 0，或双击画布切换 |
+| 显示 / 隐藏照片信息 | Tab，可查看尺寸、大小和文件中记录的相机、镜头、光圈、快门与 ISO |
+| 全屏 | F11 切换，Esc 退出 |
+| 暂停 / 播放动图 | 空格 |
+
+支持 JPEG、PNG、GIF、WebP、BMP、TIFF、ICO、AVIF，以及 HIF / HEIF / HEIC。GIF 和动画 WebP 自动播放。多图 HEIF 显示文件指定的主图，多页 TIFF 显示首页。高位深 HIF 以 8 位桌面预览显示。所有查看操作均在本地进行。
+
+## 从源码运行
+
+使用 Python 3.12，在仓库根目录运行以下命令。
+
+```sh
+python -m venv .venv
+```
+
+在 Windows PowerShell 执行 `.\.venv\Scripts\Activate.ps1`，在 macOS 或 Linux 执行 `source .venv/bin/activate`，然后安装依赖并启动查看器。
+
+```sh
+python -m pip install -e ".[build,test]"
+python -m hifine
+python -m pytest -q
+```
+
+也可运行 `python -m hifine "照片路径"` 直接打开指定文件。无文件参数时会打开随包提供的 HIF 样片。
+
+样片《大棱镜泉》由美国国家公园管理局摄影师 Jim Peaco 于 2001 年 7 月在黄石国家公园拍摄。原作在美国属于公有领域，HiFine 将其转为 HEIF 供试用。[原图与版权说明](https://commons.wikimedia.org/wiki/File:Grand_prismatic_spring.jpg)
+
+## 构建安装包
+
+在目标系统上运行 `python -m PyInstaller --noconfirm packaging/HiFine.spec`，再运行该平台的打包命令。安装包写入 `release` 目录。
+
+| 平台 | 打包命令 | 所需工具 |
+| --- | --- | --- |
+| Windows x64 | `python packaging/windows/build_installer.py` | Visual Studio C++ x64、Windows SDK、CMake 3.21+、NSIS 3 |
+| Ubuntu 24.04 | `sh packaging/linux/build-deb.sh` | dpkg-deb |
+| macOS | `sh packaging/macos/build-dmg.sh` | Xcode Command Line Tools |
+
+macOS 脚本生成与构建机架构一致的 DMG。仓库的发布工作流通过版本标签构建并上传这四个安装包及校验文件。
