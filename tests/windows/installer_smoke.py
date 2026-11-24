@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 import uuid
 import winreg
 
@@ -117,6 +118,8 @@ def main():
     software = root + r"\Software"
     classes = software + r"\Classes"
     bundle = REPO / "dist/HiFine"
+    with (REPO / "pyproject.toml").open("rb") as stream:
+        version = tomllib.load(stream)["project"]["version"]
     try:
         with tempfile.TemporaryDirectory(prefix="HiFine integration ") as work:
             directory = Path(work)
@@ -124,7 +127,7 @@ def main():
             target = directory / "HiFine"
             subprocess.run([
                 nsis, "/V2", "/INPUTCHARSET", "UTF8", "/XSetCompressor /FINAL zlib",
-                "/DAPP_VERSION=0.1.0", f"/DSOFTWARE_ROOT={software}", f"/DSHORTCUT_DIR={directory}",
+                f"/DAPP_VERSION={version}", f"/DSOFTWARE_ROOT={software}", f"/DSHORTCUT_DIR={directory}",
                 f"/DBUNDLE={bundle}", f"/DMANIFEST={REPO / 'build/windows/uninstall-files.nsh'}",
                 f"/DOUTPUT={setup}", REPO / "packaging/windows/installer.nsi",
             ], check=True)
@@ -134,6 +137,7 @@ def main():
             subprocess.run(f'"{setup}" /S /D={target}', check=True, timeout=90)
             app = target / "HiFine.exe"
             assert app.is_file() and (directory / "HiFine.lnk").is_file()
+            assert value(software + r"\Microsoft\Windows\CurrentVersion\Uninstall\HiFine", "DisplayVersion") == version
             assert value(classes + r"\.hif") == "HiFine.Heif"
             assert value(software + r"\RegisteredApplications", "HiFine") == software + r"\HiFine\Capabilities"
             assert value(classes + rf"\CLSID\{CLSID}\InprocServer32") == str(target / "HiFineThumbnail.dll")

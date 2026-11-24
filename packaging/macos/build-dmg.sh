@@ -9,8 +9,8 @@ version=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$bundle
 extension="$bundle/Contents/PlugIns/HiFineThumbnail.appex"
 mkdir -p "$extension/Contents/MacOS" "$out"
 cp "$here/Extension.plist" "$extension/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set CFBundleVersion $version" "$extension/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set CFBundleShortVersionString $version" "$extension/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $version" "$extension/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $version" "$extension/Contents/Info.plist"
 xcrun clang -O2 -fobjc-arc -fblocks -fapplication-extension -mmacosx-version-min=14.0 \
     -framework Foundation -framework QuickLookThumbnailing -framework CoreGraphics -framework ImageIO \
     -Wl,-e,_NSExtensionMain "$here/ThumbnailProvider.m" -o "$extension/Contents/MacOS/HiFineThumbnail"

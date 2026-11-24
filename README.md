@@ -1,26 +1,26 @@
 # HiFine
 
-HiFine 是 Windows、macOS 和 Linux 上的桌面图片查看器。双击打开照片后，可以直接浏览同一文件夹。查看器内置 HIF / HEIF 解码器，可读取相机拍摄的 10 位 HIF 和照片中的 EXIF 信息。
+HiFine 是 Windows、macOS 和 Linux 上的桌面图片查看器，内置 HIF / HEIF 解码器，可读取相机拍摄的 10 位 HIF 和照片中的 EXIF 信息。双击打开一张照片，就能用方向键连续翻页，或从左侧缩略图直接跳到同文件夹的另一张。HiFine 会在后台预读相邻图片。
 
-[下载最新版](https://github.com/MistEO/HiFine/releases/latest) · [v0.1.0 发布页](https://github.com/MistEO/HiFine/releases/tag/v0.1.0)
+[下载最新版](https://github.com/MistEO/HiFine/releases/latest) · [v0.2.0 更新说明](https://github.com/MistEO/HiFine/releases/tag/v0.2.0)
 
-![HiFine 在 Windows 上打开 HIF 样片](docs/preview.webp)
+![HiFine 在 Windows 上打开 HIF 样片，左侧为文件夹缩略图，右侧为照片信息](docs/preview.webp)
 
-## 下载 v0.1.0
+## 下载 v0.2.0
 
 | 系统 | 安装包 |
 | --- | --- |
-| Windows x64 | [HiFine-0.1.0-windows-x64-setup.exe](https://github.com/MistEO/HiFine/releases/download/v0.1.0/HiFine-0.1.0-windows-x64-setup.exe) |
-| Ubuntu 24.04 amd64 | [HiFine-0.1.0-linux-amd64.deb](https://github.com/MistEO/HiFine/releases/download/v0.1.0/HiFine-0.1.0-linux-amd64.deb) |
-| macOS 14 及以上，Apple 芯片 | [HiFine-0.1.0-macOS-arm64.dmg](https://github.com/MistEO/HiFine/releases/download/v0.1.0/HiFine-0.1.0-macOS-arm64.dmg) |
-| macOS 14 及以上，Intel 处理器 | [HiFine-0.1.0-macOS-x86_64.dmg](https://github.com/MistEO/HiFine/releases/download/v0.1.0/HiFine-0.1.0-macOS-x86_64.dmg) |
+| Windows x64 | [HiFine-0.2.0-windows-x64-setup.exe](https://github.com/MistEO/HiFine/releases/download/v0.2.0/HiFine-0.2.0-windows-x64-setup.exe) |
+| Ubuntu 24.04 amd64 | [HiFine-0.2.0-linux-amd64.deb](https://github.com/MistEO/HiFine/releases/download/v0.2.0/HiFine-0.2.0-linux-amd64.deb) |
+| macOS 14 及以上，Apple 芯片 | [HiFine-0.2.0-macOS-arm64.dmg](https://github.com/MistEO/HiFine/releases/download/v0.2.0/HiFine-0.2.0-macOS-arm64.dmg) |
+| macOS 14 及以上，Intel 处理器 | [HiFine-0.2.0-macOS-x86_64.dmg](https://github.com/MistEO/HiFine/releases/download/v0.2.0/HiFine-0.2.0-macOS-x86_64.dmg) |
 
-安装包及 HEIF 组件源码包的 SHA-256 校验值见发布附件。[SHA256SUMS.txt](https://github.com/MistEO/HiFine/releases/download/v0.1.0/SHA256SUMS.txt)
+安装包及 HEIF 组件源码包的 SHA-256 校验值见发布附件。[SHA256SUMS.txt](https://github.com/MistEO/HiFine/releases/download/v0.2.0/SHA256SUMS.txt)
 
 ### 安装与双击打开
 
 - **Windows**　运行安装程序。安装按当前用户生效。完成后右击一张图片，选择“打开方式”中的 HiFine，并选择始终使用，即可双击打开同一扩展名的图片。也可以从安装完成页进入系统“默认应用”逐项设置。资源管理器使用中图标或更大图标时，可显示 HIF、HEIF、HEIC 缩略图。其他图片由系统已安装的缩略图程序处理。
-- **Ubuntu**　在下载目录运行 `sudo apt install ./HiFine-0.1.0-linux-amd64.deb`。在文件管理器的图片属性中将 HiFine 设为默认应用。安装包还包含供 GNOME Files 和 Thunar 使用的 HEIF 缩略图程序。
+- **Ubuntu**　在下载目录运行 `sudo apt install ./HiFine-0.2.0-linux-amd64.deb`。在文件管理器的图片属性中将 HiFine 设为默认应用。安装包还包含供 GNOME Files 和 Thunar 使用的 HEIF 缩略图程序。
 - **macOS**　打开对应芯片的 DMG，将 HiFine 拖入“应用程序”。在 Finder 中选中图片，按 ⌘I，在“打开方式”中选择 HiFine，再点“全部更改”。若不清楚芯片型号，可在苹果菜单的“关于本机”中查看。
 
 macOS 版采用 ad-hoc 本地签名，尚未经 Apple 公证。首次启动如果系统提示无法验证，确认下载来源后可在“系统设置 → 隐私与安全性”中选择“仍要打开”。随包的 Quick Look 扩展使用 macOS ImageIO 解码，Finder 中不同相机 HIF 的缩略图兼容性仍待实机验证。[Apple 的首次打开说明](https://support.apple.com/zh-cn/102445)
@@ -41,6 +41,8 @@ macOS 版采用 ad-hoc 本地签名，尚未经 Apple 公证。首次启动如�
 | 暂停 / 播放动图 | 空格 |
 
 Windows 会弹出资源管理器的经典文件菜单，对应 Windows 11 的“显示更多选项”。菜单包含适用于这张图片的系统命令和已安装的右键扩展。“重命名”会在资源管理器中进入文件名编辑状态。macOS 和 Linux 的右键菜单可以在 Finder 或文件管理器中定位图片。若 Linux 文件管理器不支持选中文件，HiFine 会打开所在文件夹。
+
+通过右键菜单操作文件后，重命名或删除会同步反映在缩略图列表中。如果文件夹里只有一张图片，编辑器先删除它再以原名保存时，HiFine 会恢复主图和缩略图。
 
 看图时，HiFine 会在后台预读前后各一张图片，优先读取翻页方向的下一张。回看时会复用已解码的图片和照片信息，文件有改动则重新读取。内存缓存最多保留 8 张图片，像素数据合计上限为 256 MiB。单张图片超出预算时，会在翻到它时解码。
 
