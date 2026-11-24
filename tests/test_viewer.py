@@ -154,21 +154,32 @@ def test_rename_and_delete_after_menu_closes(app, window, tmp_path, monkeypatch)
     assert not window.next_button.isEnabled()
 
 
-def test_menu_edit_reloads_a_replaced_file(app, window, tmp_path, monkeypatch):
+@pytest.mark.parametrize("save_method", ["atomic", "file-removed", "folder-empty"])
+def test_menu_edit_reloads_a_replaced_file(app, window, tmp_path, monkeypatch, save_method):
     photo = tmp_path / "照片.png"
+    edited = tmp_path / "edited.tmp"
     Image.new("RGB", (64, 32), "red").save(photo)
+    Image.new("RGB", (80, 40), "blue").save(edited, "PNG")
     window.open_file(photo)
     finish_read(app, window)
+    wait_until(app, lambda: thumbnail_color(window.thumbnail_list.currentIndex()) == "#ff0000")
     monkeypatch.setattr("hifine.viewer.show_file_menu", lambda *args: True)
     window._menu_refresh.setInterval(250)
     request_menu(app, window.canvas, window.canvas.rect().center())
     assert str(photo) in window._menu_watch.files()
-    photo.unlink()
-    wait_until(app, lambda: str(photo) not in window._menu_watch.files())
-    Image.new("RGB", (80, 40), "blue").save(photo)
+    if save_method == "atomic":
+        edited.replace(photo)
+    else:
+        photo.unlink()
+        wait_until(app, lambda: str(photo) not in window._menu_watch.files())
+        if save_method == "folder-empty":
+            wait_until(app, lambda: window.current_path is None)
+        photo.write_bytes(edited.read_bytes())
     wait_until(app, lambda: window.canvas._image.size().toTuple() == (80, 40))
     assert window.canvas._image.pixelColor(0, 0).blue() == 255
     assert window.current_path == photo
+    assert str(photo) in window._menu_watch.files()
+    wait_until(app, lambda: thumbnail_color(window.thumbnail_list.currentIndex()) == "#0000ff")
 
 
 def test_thumbnail_click_and_keyboard_follow_the_same_selection(app, window, tmp_path):

@@ -304,44 +304,50 @@ class MainWindow(QMainWindow):
 
     def _menu_file_changed(self, filename):
         path = Path(filename)
-        if path not in self._menu_versions or path not in self.files:
+        if path not in self._menu_versions:
             return
         previous = self._menu_versions[path]
-        if filename not in self._menu_watch.files():
-            self._menu_watch.addPath(filename)
         version = image_version(path)
         if version is None:
             self._menu_refresh.start()
             return
+        if filename not in self._menu_watch.files():
+            self._menu_watch.addPath(filename)
         self._menu_versions[path] = version
         if version != previous:
             if path == self.current_path:
                 self._schedule_read(path, scan=False)
-            else:
+            elif path in self.files:
                 self.thumbnail_list.invalidate_preview(self.files.index(path))
 
     def _rescan_menu_folder(self):
-        if self.current_path is not None:
+        path = self.current_path or next(iter(self._menu_versions), None)
+        if path is not None:
             self._menu_scan = self._reads.rescan_folder(
-                self.current_path, self._menu_versions.get(self.current_path), self.files)
+                path, self._menu_versions.get(path), self.files)
 
     def _menu_folder_rescanned(self, request, files, renamed):
         if request is not self._menu_scan or self._menu_refresh.isActive():
             return
         self._menu_scan = None
         known = set(files)
-        watched = {Path(name) for name in self._menu_watch.files()}
-        # Editors may remove a file before saving its replacement. Qt stops
-        # watching the removed file even when the replacement has the same name.
+        missing = [name for name in self._menu_watch.files() if Path(name) not in known]
+        if missing:
+            self._menu_watch.removePaths(missing)
+        # A replacement can arrive as a single directory change. Recheck the
+        # menu targets even if Qt still lists their file watches.
         for path in self._menu_versions:
-            if path in known and path not in watched:
+            if path in known:
                 self._menu_file_changed(str(path))
         if len(files) == len(self.files) and all(old.name == new.name for old, new in zip(self.files, files)):
             return
+        original_path, version = request
         self.files = files
         self.thumbnail_list.set_files(files)
         if not files:
-            self._clear_menu_watch()
+            # An editor can leave the folder empty between removing the only
+            # image and saving its replacement. Keep watching the directory.
+            self._menu_versions = {original_path: version}
             self._reads.reset()
             self._loading_hint.stop()
             self._stop_animation()
@@ -356,13 +362,14 @@ class MainWindow(QMainWindow):
             self._update_navigation()
             return
 
-        original_path, version = request
+        selected = self.current_path or original_path
         if renamed:
             self._menu_versions[renamed] = version
             self._menu_watch.addPath(str(renamed))
+            if selected == original_path:
+                selected = renamed
         self._menu_versions = {path: version for path, version in self._menu_versions.items() if path in known}
-        selected = renamed if renamed and self.current_path == original_path else self.current_path
-        self._index = files.index(selected) if selected in known else min(self._index, len(files) - 1)
+        self._index = files.index(selected) if selected in known else min(max(self._index, 0), len(files) - 1)
         path = files[self._index]
         loading = self._reads.loading
         if loading:
