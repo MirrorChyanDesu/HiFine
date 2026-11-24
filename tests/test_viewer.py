@@ -45,6 +45,70 @@ def finish_read(app, window, *, prefetch=False):
                and (not prefetch or not window._reads._active))
 
 
+def thumbnail_color(row):
+    preview = row.data(Qt.ItemDataRole.DecorationRole)
+    if preview is not None and not preview.isNull():
+        return preview.pixelColor(preview.rect().center()).name()
+
+
+def test_thumbnail_click_and_keyboard_follow_the_same_selection(app, window, tmp_path):
+    first, middle, last = [tmp_path / f"照片{i}.png" for i in (1, 2, 10)]
+    for path, color in ((last, "blue"), (first, "red"), (middle, "lime")):
+        Image.new("RGB", (32, 16), color).save(path)
+    window.open_file(first)
+    finish_read(app, window)
+
+    view = window.thumbnail_list
+    model = view.model()
+    assert view.isVisible()
+    assert view.mapTo(window, view.rect().topRight()).x() < window.stage.mapTo(window, QPoint()).x()
+    rows = [model.index(row, 0) for row in range(model.rowCount())]
+    assert [row.data() for row in rows] == [first.name, middle.name, last.name]
+    assert view.selectionModel().selectedIndexes() == [rows[0]]
+
+    wait_until(app, lambda: thumbnail_color(rows[2]) == "#0000ff")
+    QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton,
+                     pos=view.visualRect(rows[2]).center())
+    finish_read(app, window)
+    assert window.current_path == last
+    assert window.canvas._image.pixelColor(0, 0).blue() == 255
+    assert view.selectionModel().selectedIndexes() == [rows[2]]
+
+    QTest.keyClick(app.focusWidget() or window, Qt.Key.Key_Left)
+    finish_read(app, window)
+    assert window.current_path == middle
+    assert window.canvas._image.pixelColor(0, 0).green() == 255
+    assert view.currentIndex() == rows[1]
+    assert view.selectionModel().selectedIndexes() == [rows[1]]
+
+
+def test_opening_folder_scrolls_to_selection_and_replaces_thumbnail_list(app, window, tmp_path):
+    paths = [tmp_path / f"{i}.png" for i in range(18)]
+    for path in paths:
+        Image.new("RGB", (8, 8), "red").save(path)
+    window.open_file(paths[-1])
+    finish_read(app, window)
+    view = window.thumbnail_list
+    assert view.currentIndex().row() == len(paths) - 1
+    wait_until(app, lambda: view.viewport().rect().contains(
+        view.visualRect(view.currentIndex()).center()))
+    wait_until(app, lambda: thumbnail_color(view.currentIndex()) == "#ff0000")
+
+    other = tmp_path / "other" / paths[-1].name
+    other.parent.mkdir()
+    Image.new("RGB", (8, 8), "blue").save(other)
+    window.open_file(other)
+    finish_read(app, window)
+    assert view.model().rowCount() == 1
+    current = view.currentIndex()
+    assert current.row() == 0
+    assert current.data() == other.name
+    assert view.selectionModel().selectedIndexes() == [current]
+    assert window.current_path == other
+    assert window.canvas._image.pixelColor(0, 0).blue() == 255
+    wait_until(app, lambda: thumbnail_color(current) == "#0000ff")
+
+
 def test_keyboard_navigation_details_and_bad_image(app, window, tmp_path):
     first, second, bad = (tmp_path / name for name in ("图1.png", "图2.png", "图10.jpg"))
     Image.new("RGB", (13, 7), "red").save(first)
@@ -129,6 +193,8 @@ def test_prefetched_file_can_be_replaced_or_deleted(app, window, tmp_path):
     Image.new("RGB", (8, 8), "lime").save(second)
     window.open_file(first)
     finish_read(app, window, prefetch=True)
+    second_row = window.thumbnail_list.model().index(1, 0)
+    wait_until(app, lambda: thumbnail_color(second_row) == "#00ff00")
 
     replacement = tmp_path / "replacement.tmp"
     Image.new("RGB", (32, 16), "blue").save(replacement, format="PNG")
@@ -137,6 +203,7 @@ def test_prefetched_file_can_be_replaced_or_deleted(app, window, tmp_path):
     finish_read(app, window)
     assert window.canvas._image.size().toTuple() == (32, 16)
     assert window.canvas._image.pixelColor(0, 0).blue() == 255
+    wait_until(app, lambda: thumbnail_color(second_row) == "#0000ff")
 
     QTest.keyClick(window, Qt.Key.Key_Left)
     finish_read(app, window, prefetch=True)
@@ -146,6 +213,7 @@ def test_prefetched_file_can_be_replaced_or_deleted(app, window, tmp_path):
     assert window.stage.currentWidget() is window.state
     assert window.state_title.text() == "无法打开这张图片"
     assert window.canvas._image.isNull()
+    wait_until(app, lambda: second_row.data(Qt.ItemDataRole.DecorationRole) == QImage())
 
 
 @pytest.fixture

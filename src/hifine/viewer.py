@@ -13,6 +13,7 @@ from .canvas import ImageCanvas
 from .controls import ElidedLabel, InfoPanel, divider, glyph, tool_button
 from .imaging import SUPPORTED_EXTENSIONS
 from .reader import ImageReader
+from .thumbnails import ThumbnailList
 
 
 STYLE = """
@@ -129,6 +130,10 @@ class MainWindow(QMainWindow):
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
+        self.thumbnail_list = ThumbnailList()
+        self.thumbnail_list.row_requested.connect(self._go_to)
+        QApplication.instance().aboutToQuit.connect(self.thumbnail_list.shutdown)
+        body.addWidget(self.thumbnail_list)
         self.stage = QStackedWidget()
         self.canvas = ImageCanvas()
         self.stage.addWidget(self.canvas)
@@ -290,17 +295,21 @@ class MainWindow(QMainWindow):
 
     def open_file(self, path):
         path = Path(path).expanduser().absolute()
+        self.thumbnail_list.set_files([])
         self.files = [path]
         self._index = 0
         self._direction = 1
         self._schedule_read(path, scan=True)
 
     def navigate(self, step):
-        index = self._index + step
-        if 0 <= index < len(self.files):
-            self._index = index
-            self._direction = 1 if step > 0 else -1
-            self._schedule_read(self.files[index], scan=False)
+        self._go_to(self._index + step)
+
+    def _go_to(self, index):
+        if not 0 <= index < len(self.files) or index == self._index:
+            return
+        self._direction = 1 if index > self._index else -1
+        self._index = index
+        self._schedule_read(self.files[index], scan=False)
 
     def _schedule_read(self, path, scan):
         self._stop_animation()
@@ -337,8 +346,10 @@ class MainWindow(QMainWindow):
         if siblings is not None:
             self.files = siblings
             self._index = self.files.index(path)
+            self.thumbnail_list.set_files(siblings)
             self._reads.set_neighbors(self._neighbors())
         self._update_navigation()
+        self.thumbnail_list.sync_current(self._index, frame)
         details = frame.metadata if frame is not None else {}
         self.info_panel.set_details(path, details)
         if error:
@@ -355,6 +366,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self._loading_hint.stop()
         self._reads.reset()
+        self.thumbnail_list.shutdown()
         super().closeEvent(event)
 
     def _start_animation(self, path, orientation):
@@ -412,6 +424,7 @@ class MainWindow(QMainWindow):
             self._movie.setPaused(state == QMovie.MovieState.Running)
 
     def _update_navigation(self):
+        self.thumbnail_list.select_row(self._index)
         self.prev_button.setEnabled(self._index > 0)
         self.next_button.setEnabled(0 <= self._index < len(self.files) - 1)
         self.position.setText(f"{self._index + 1} / {len(self.files)}" if self.files else "—")
@@ -419,6 +432,7 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, "info_panel"):
+            self.thumbnail_list.setFixedWidth(max(105, min(176, round(self.width() * 0.15))))
             self.info_panel.setFixedWidth(max(205, min(278, round(self.width() * 0.235))))
 
     def dragEnterEvent(self, event):
