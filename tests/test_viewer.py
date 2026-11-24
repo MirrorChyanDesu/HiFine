@@ -1,6 +1,7 @@
 """Exercise the viewer through Qt key, wheel and pointer events."""
 
 import os
+from threading import Event
 from time import monotonic, sleep
 
 from PIL import Image
@@ -10,6 +11,7 @@ from PySide6.QtGui import QImage, QMovie, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
+from hifine import reader
 from hifine.viewer import MainWindow
 
 
@@ -26,16 +28,21 @@ def window(app):
     widget.activateWindow()
     app.processEvents()
     yield widget
-    widget._pool.waitForDone()
     widget.close()
+    widget._reads._pool.waitForDone()
 
 
-def finish_read(app, window):
+def wait_until(app, predicate):
     deadline = monotonic() + 10
-    while window._reader is not None:
+    while not predicate():
         assert monotonic() < deadline, "timed out waiting for the viewer"
         app.processEvents()
         sleep(0.005)
+
+
+def finish_read(app, window, *, prefetch=False):
+    wait_until(app, lambda: not window._reads.loading
+               and (not prefetch or not window._reads._active))
 
 
 def test_keyboard_navigation_details_and_bad_image(app, window, tmp_path):
@@ -67,6 +74,180 @@ def test_keyboard_navigation_details_and_bad_image(app, window, tmp_path):
     assert window.isFullScreen()
     QTest.keyClick(window, Qt.Key.Key_Escape)
     assert not window.isFullScreen()
+
+
+def test_neighbors_are_decoded_before_navigation_and_reused(app, window, tmp_path, monkeypatch):
+    first, middle, last = [tmp_path / f"{i}.png" for i in range(3)]
+    for path, shade in ((first, 40), (middle, 80), (last, 120)):
+        Image.new("L", (8, 8), shade).save(path)
+    decoded = []
+    load_image = reader.load_image
+
+    def record(path, **options):
+        decoded.append(path)
+        return load_image(path, **options)
+
+    monkeypatch.setattr(reader, "load_image", record)
+    window.open_file(middle)
+    finish_read(app, window, prefetch=True)
+    assert decoded == [middle, last, first]
+    assert window.canvas._image.pixelColor(0, 0).red() == 80
+    for key, shade in ((Qt.Key.Key_Left, 40), (Qt.Key.Key_Right, 80),
+                       (Qt.Key.Key_Right, 120), (Qt.Key.Key_Left, 80)):
+        QTest.keyClick(window, key)
+        finish_read(app, window, prefetch=True)
+        assert window.canvas._image.pixelColor(0, 0).red() == shade
+    assert len(decoded) == 3
+
+
+def test_oversized_neighbor_decodes_only_when_selected(app, window, tmp_path, monkeypatch):
+    first, large = tmp_path / "1.png", tmp_path / "2.png"
+    Image.new("RGB", (1, 1), "red").save(first)
+    Image.new("RGB", (20, 20), "blue").save(large)
+    window._reads._cache.max_bytes = 64
+    decoded = []
+    load_image = reader.load_image
+
+    def record(path, **options):
+        loaded = load_image(path, **options)
+        decoded.append(path)
+        return loaded
+
+    monkeypatch.setattr(reader, "load_image", record)
+    window.open_file(first)
+    finish_read(app, window, prefetch=True)
+    assert decoded == [first]
+    QTest.keyClick(window, Qt.Key.Key_Right)
+    finish_read(app, window)
+    assert decoded == [first, large]
+    assert window.canvas._image.pixelColor(0, 0).blue() == 255
+
+
+def test_prefetched_file_can_be_replaced_or_deleted(app, window, tmp_path):
+    first, second = tmp_path / "1.png", tmp_path / "2.png"
+    Image.new("RGB", (8, 8), "red").save(first)
+    Image.new("RGB", (8, 8), "lime").save(second)
+    window.open_file(first)
+    finish_read(app, window, prefetch=True)
+
+    replacement = tmp_path / "replacement.tmp"
+    Image.new("RGB", (32, 16), "blue").save(replacement, format="PNG")
+    replacement.replace(second)
+    QTest.keyClick(window, Qt.Key.Key_Right)
+    finish_read(app, window)
+    assert window.canvas._image.size().toTuple() == (32, 16)
+    assert window.canvas._image.pixelColor(0, 0).blue() == 255
+
+    QTest.keyClick(window, Qt.Key.Key_Left)
+    finish_read(app, window, prefetch=True)
+    second.unlink()
+    QTest.keyClick(window, Qt.Key.Key_Right)
+    finish_read(app, window)
+    assert window.stage.currentWidget() is window.state
+    assert window.state_title.text() == "无法打开这张图片"
+    assert window.canvas._image.isNull()
+
+
+@pytest.fixture
+def decoder_gates(monkeypatch):
+    gates = {}
+    reads = []
+    load_image = reader.load_image
+
+    def pause(path):
+        gates[path] = (Event(), Event())
+        return gates[path]
+
+    def slow_read(path, **options):
+        reads.append(path)
+        if path in gates:
+            started, release = gates[path]
+            started.set()
+            assert release.wait(15), "timed out waiting to release the decoder"
+        return load_image(path, **options)
+
+    monkeypatch.setattr(reader, "load_image", slow_read)
+    try:
+        yield pause, reads
+    finally:
+        for _, release in gates.values():
+            release.set()
+
+
+@pytest.fixture
+def blocked_prefetch(app, window, tmp_path, decoder_gates):
+    first, slow = tmp_path / "1.png", tmp_path / "2.png"
+    Image.new("RGB", (8, 8), "red").save(first)
+    Image.new("RGB", (8, 8), "lime").save(slow)
+    pause, reads = decoder_gates
+    started, release = pause(slow)
+    window.open_file(first)
+    wait_until(app, started.is_set)
+    return slow, release, reads
+
+
+def test_navigation_joins_inflight_prefetch(app, window, blocked_prefetch):
+    slow, release, reads = blocked_prefetch
+    QTest.keyClick(window, Qt.Key.Key_Right)
+    assert window.current_path == slow
+    release.set()
+    finish_read(app, window, prefetch=True)
+    assert reads.count(slow) == 1
+    assert window.canvas._image.pixelColor(0, 0).green() == 255
+
+
+def test_skip_over_inflight_neighbor_keeps_its_pixels(app, window, tmp_path, decoder_gates):
+    first, middle, last = [tmp_path / f"{i}.png" for i in range(3)]
+    for path, color in ((first, "red"), (middle, "lime"), (last, "blue")):
+        Image.new("RGB", (8, 8), color).save(path)
+    pause, reads = decoder_gates
+    middle_started, release_middle = pause(middle)
+    last_started, release_last = pause(last)
+    window.open_file(first)
+    wait_until(app, middle_started.is_set)
+    QTest.keyClick(window, Qt.Key.Key_Right)
+    QTest.keyClick(window, Qt.Key.Key_Right)
+    wait_until(app, last_started.is_set)
+    release_middle.set()
+    wait_until(app, lambda: all(job.path != middle for job in window._reads._active.values()))
+    release_last.set()
+    finish_read(app, window, prefetch=True)
+    assert window.current_path == last
+    assert window.canvas._image.pixelColor(0, 0).blue() == 255
+    QTest.keyClick(window, Qt.Key.Key_Left)
+    finish_read(app, window, prefetch=True)
+    assert window.canvas._image.pixelColor(0, 0).green() == 255
+    assert reads.count(middle) == 1
+
+
+def test_file_replaced_after_prefetch_before_result_delivery(app, window, tmp_path, blocked_prefetch):
+    slow, release, _ = blocked_prefetch
+    release.set()
+    # Leave the completed prefetch's queued Qt signal pending on the GUI thread.
+    assert window._reads._pool.waitForDone(5000)
+    assert window._reads._active
+    replacement = tmp_path / "replacement.tmp"
+    Image.new("RGB", (32, 16), "blue").save(replacement, format="PNG")
+    replacement.replace(slow)
+    window.navigate(1)
+    finish_read(app, window)
+    assert window.canvas._image.size().toTuple() == (32, 16)
+    assert window.canvas._image.pixelColor(0, 0).blue() == 255
+
+
+def test_new_folder_opens_while_old_prefetch_is_blocked(app, window, tmp_path, blocked_prefetch):
+    _, release, _ = blocked_prefetch
+    other = tmp_path / "other" / "1.png"
+    other.parent.mkdir()
+    Image.new("RGB", (8, 8), "blue").save(other)
+    window.open_file(other)
+    finish_read(app, window)
+    assert window.canvas._image.pixelColor(0, 0).blue() == 255
+    release.set()
+    finish_read(app, window, prefetch=True)
+    assert window.files == [other]
+    assert window.current_path == other
+    assert window.canvas._image.pixelColor(0, 0).blue() == 255
 
 
 def test_pointer_anchored_zoom_and_drag(app, window):
@@ -127,3 +308,7 @@ def test_animated_playback_keeps_zoom(app, window, tmp_path, extension):
     finish_read(app, window)
     assert window._movie is None
     assert not window.play_button.isVisible()
+    QTest.keyClick(window, Qt.Key.Key_Left)
+    finish_read(app, window)
+    assert window._movie.state() == QMovie.MovieState.Running
+    assert window.play_button.isVisible()

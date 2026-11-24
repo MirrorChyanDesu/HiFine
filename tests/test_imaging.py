@@ -2,7 +2,7 @@ import struct
 
 import pillow_heif
 import pytest
-from PIL import ExifTags, Image, ImageCms
+from PIL import ExifTags, Image, ImageCms, PngImagePlugin
 
 from hifine.imaging import ImageLoadError, list_images, load_image, make_thumbnail
 
@@ -83,6 +83,25 @@ def test_transparency_and_embedded_profile(tmp_path):
     thumb = make_thumbnail(path, 100)
     assert thumb.size == (2, 3)
     assert thumb.getpixel((0, 0)) == (26, 187, 55, 88)
+
+
+@pytest.mark.parametrize(("mode", "channels"), [("RGB", 3), ("RGBA", 4), ("P", 4)])
+def test_prefetch_budget_skips_pixel_decode(tmp_path, monkeypatch, mode, channels):
+    path = tmp_path / "budget.png"
+    image = Image.new(mode, (8, 4))
+    if mode == "P":
+        image.info["transparency"] = 0
+    image.save(path)
+    pixel_bytes = image.width * image.height * channels
+    with monkeypatch.context() as patch:
+        def unexpected_load(*args, **kwargs):
+            pytest.fail("over-budget prefetch decoded image pixels")
+
+        patch.setattr(PngImagePlugin.PngImageFile, "load", unexpected_load)
+        with pytest.raises(ImageLoadError, match="预读缓存"):
+            load_image(path, max_pixel_bytes=pixel_bytes - 1)
+    assert load_image(path, max_pixel_bytes=pixel_bytes).image.size == image.size
+    assert load_image(path).image.size == image.size
 
 
 def test_grayscale_16bit(tmp_path):

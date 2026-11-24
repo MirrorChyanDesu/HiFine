@@ -2,9 +2,7 @@
 
 from pathlib import Path
 
-from PySide6.QtCore import (
-    QDir, QObject, QRunnable, QSize, QStandardPaths, Qt, QThreadPool, QTimer, Signal, Slot,
-)
+from PySide6.QtCore import QDir, QSize, QStandardPaths, Qt, QTimer, Slot
 from PySide6.QtGui import QColorSpace, QGuiApplication, QImage, QKeySequence, QMovie, QShortcut, QTransform
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
@@ -13,7 +11,8 @@ from PySide6.QtWidgets import (
 
 from .canvas import ImageCanvas
 from .controls import ElidedLabel, InfoPanel, divider, glyph, tool_button
-from .imaging import SUPPORTED_EXTENSIONS, list_images, load_image
+from .imaging import SUPPORTED_EXTENSIONS
+from .reader import ImageReader
 
 
 STYLE = """
@@ -51,44 +50,6 @@ QToolTip { background: #343436; color: #efeee9; border: 1px solid #595756; paddi
 """
 
 
-class _ReadSignals(QObject):
-    finished = Signal(object, object, QImage, object, str)
-
-
-class _ReadImage(QRunnable):
-    def __init__(self, path, scan):
-        super().__init__()
-        self.path = path
-        self.scan = scan
-        self.signals = _ReadSignals()
-
-    def run(self):
-        siblings = None
-        if self.scan:
-            try:
-                siblings = list_images(self.path.parent)
-            except OSError:
-                siblings = []
-            if self.path not in siblings:
-                siblings = [self.path]
-        image = QImage()
-        details = {}
-        error = ""
-        try:
-            loaded = load_image(self.path)
-            pixels = loaded.image
-            fmt = (QImage.Format.Format_RGBA8888 if pixels.mode == "RGBA"
-                   else QImage.Format.Format_RGB888)
-            stride = pixels.width * len(pixels.getbands())
-            image = QImage(pixels.tobytes(), pixels.width, pixels.height, stride, fmt).copy()
-            if image.isNull():
-                raise ValueError("图片尺寸过大，无法分配显示内存。")
-            details = loaded.metadata
-        except Exception as exc:
-            error = str(exc) or "请检查图片是否完整，再重新打开。"
-        self.signals.finished.emit(self.path, siblings, image, details, error)
-
-
 class MainWindow(QMainWindow):
     def __init__(self, sample_path=None):
         super().__init__()
@@ -103,12 +64,12 @@ class MainWindow(QMainWindow):
         self.current_path = None
         self.files = []
         self._index = -1
-        self._reader = None
-        self._pending = None
+        self._direction = 1
+        self._reads = ImageReader(self)
+        self._reads.ready.connect(self._read_finished)
+        QApplication.instance().aboutToQuit.connect(self._reads.shutdown)
         self._movie = None
         self._movie_orientation = 1
-        self._pool = QThreadPool(self)
-        QApplication.instance().aboutToQuit.connect(self._pool.waitForDone)
         self._loading_hint = QTimer(self)
         self._loading_hint.setSingleShot(True)
         self._loading_hint.setInterval(150)
@@ -331,12 +292,14 @@ class MainWindow(QMainWindow):
         path = Path(path).expanduser().absolute()
         self.files = [path]
         self._index = 0
+        self._direction = 1
         self._schedule_read(path, scan=True)
 
     def navigate(self, step):
         index = self._index + step
         if 0 <= index < len(self.files):
             self._index = index
+            self._direction = 1 if step > 0 else -1
             self._schedule_read(self.files[index], scan=False)
 
     def _schedule_read(self, path, scan):
@@ -347,9 +310,11 @@ class MainWindow(QMainWindow):
             self._loading_hint.start()
         else:
             self._show_loading()
-        self._pending = (path, scan)
-        if self._reader is None:
-            self._start_read()
+        self._reads.request(path, self._neighbors(), scan=scan)
+
+    def _neighbors(self):
+        indices = (self._index + self._direction, self._index - self._direction)
+        return [self.files[i] for i in indices if 0 <= i < len(self.files)]
 
     def _show_path(self, path):
         self.setWindowTitle(f"{path.name} — HiFine")
@@ -365,25 +330,16 @@ class MainWindow(QMainWindow):
         self.canvas.set_image(QImage())
         self._show_state("正在读取图片…")
 
-    def _start_read(self):
-        path, scan = self._pending
-        self._pending = None
-        self._reader = _ReadImage(path, scan)
-        self._reader.signals.finished.connect(self._read_finished)
-        self._pool.start(self._reader)
-
-    @Slot(object, object, QImage, object, str)
-    def _read_finished(self, path, siblings, image, details, error):
-        self._reader = None
-        if self._pending is not None:
-            self._start_read()
-            return
+    @Slot(object, object, object, str)
+    def _read_finished(self, path, siblings, frame, error):
         self._loading_hint.stop()
         self._show_path(path)
         if siblings is not None:
             self.files = siblings
             self._index = self.files.index(path)
+            self._reads.set_neighbors(self._neighbors())
         self._update_navigation()
+        details = frame.metadata if frame is not None else {}
         self.info_panel.set_details(path, details)
         if error:
             self.canvas.set_image(QImage())
@@ -391,10 +347,15 @@ class MainWindow(QMainWindow):
         else:
             self.stage.setCurrentWidget(self.canvas)
             self._has_image = True
-            self.canvas.set_image(image)
+            self.canvas.set_image(frame.image)
             self._set_zoom_enabled(True)
             if details.get("animated"):
                 self._start_animation(path, details.get("animation_orientation", 1))
+
+    def closeEvent(self, event):
+        self._loading_hint.stop()
+        self._reads.reset()
+        super().closeEvent(event)
 
     def _start_animation(self, path, orientation):
         movie = QMovie(str(path), parent=self)

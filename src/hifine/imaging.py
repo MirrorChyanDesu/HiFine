@@ -117,11 +117,15 @@ def _display_pixels(image: Image.Image) -> Image.Image:
     return image.convert(mode)
 
 
-def load_image(path: str | Path) -> LoadedImage:
+def load_image(path: str | Path, *, max_pixel_bytes: int | None = None) -> LoadedImage:
     """Decode the primary HEIF image or the first frame of other image formats."""
     path = Path(path)
     try:
         with Image.open(path, formats=_FORMATS) as source:
+            if max_pixel_bytes is not None:
+                channels = 4 if source.has_transparency_data else 3
+                if source.width * source.height * channels > max_pixel_bytes:
+                    raise ImageLoadError(f"{path.name} 超出图片预读缓存容量。")
             # The HEIF plugin opens the declared primary item, which can follow a preview.
             # Its decoder already applies the container's orientation and clears EXIF orientation.
             image_format = source.format or path.suffix[1:].upper()
