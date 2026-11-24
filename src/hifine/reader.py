@@ -6,7 +6,7 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
 from PySide6.QtGui import QImage
 
 from .image_cache import DecodedImage, ImageCache, image_version
-from .imaging import list_images, load_image
+from .imaging import SUPPORTED_EXTENSIONS, list_images, load_image
 
 
 def _decode(path: Path, cached: DecodedImage | None, max_pixel_bytes: int | None) -> DecodedImage:
@@ -65,6 +65,7 @@ class ImageReader(QObject):
     """Keep only the latest selection pending and reuse an in-flight neighbor."""
 
     ready = Signal(object, object, object, str)
+    folder_rescanned = Signal(object, object, object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -89,16 +90,43 @@ class ImageReader(QObject):
         self._queue.clear()
         self._cache.clear()
 
+    def rescan_folder(self, path, version, known_files):
+        request = (path, version)
+        known = set(known_files)
+
+        def scan():
+            try:
+                files = list_images(path.parent)
+                if path.suffix.lower() not in SUPPORTED_EXTENSIONS and path.is_file():
+                    files = [path]  # A file opened through the "all files" filter.
+            except FileNotFoundError:
+                files = []
+            except OSError:
+                return
+            # A rename preserves the file ID. Only newly listed names could
+            # be the missing file, even in a folder containing hard links.
+            renamed = None
+            if path not in files and version is not None and version[1]:
+                for candidate in files:
+                    if candidate not in known:
+                        candidate_version = image_version(candidate)
+                        if candidate_version and candidate_version[:2] == version[:2]:
+                            renamed = candidate
+                            break
+            self.folder_rescanned.emit(request, files, renamed)
+
+        self._pool.start(scan)
+        return request
+
     def request(self, path: Path, neighbors, scan=False):
         if scan:
             self.reset()
         self._wanted = path
         self._scan = scan
-        self.set_neighbors(neighbors)
         active = self._active.get((self._generation, path))
         if active is not None:
             active.joined = True
-        self._dispatch()
+        self.set_neighbors(neighbors)
 
     def set_neighbors(self, neighbors):
         self._neighbors = neighbors
@@ -106,6 +134,7 @@ class ImageReader(QObject):
         # should not immediately be decoded again in the same round.
         self._queue = [path for path in neighbors if path not in self._cache
                        and (self._generation, path) not in self._active]
+        self._dispatch()
 
     def _dispatch(self):
         if self.loading:

@@ -1,12 +1,13 @@
 """High-DPI image canvas with pointer-anchored zoom."""
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPixmap
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import QBrush, QColor, QContextMenuEvent, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
 
 class ImageCanvas(QWidget):
     zoom_changed = Signal(float, bool)
+    file_menu_requested = Signal(QPoint)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -92,20 +93,36 @@ class ImageCanvas(QWidget):
         super().resizeEvent(event)
         self._refresh()
 
+    def _image_rect(self):
+        scale = self.zoom() / self.devicePixelRatioF()
+        target = QRectF(0, 0, self._image.width() * scale, self._image.height() * scale)
+        target.moveCenter(QRectF(self.rect()).center() + self._offset)
+        return target
+
+    def contextMenuEvent(self, event):
+        visible = self._image_rect().intersected(QRectF(self.rect()))
+        if event.reason() == QContextMenuEvent.Reason.Keyboard and not visible.isEmpty():
+            position = self.mapToGlobal(visible.center().toPoint())
+        elif visible.contains(event.pos()):
+            position = event.globalPos()
+        else:
+            return super().contextMenuEvent(event)
+        event.accept()
+        self.file_menu_requested.emit(position)
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.fillRect(event.rect(), QColor("#18191b"))
         if self._image.isNull():
             return
-        scale = self.zoom() / self.devicePixelRatioF()
-        target = QRectF(0, 0, self._image.width() * scale, self._image.height() * scale)
-        target.moveCenter(QRectF(self.rect()).center() + self._offset)
+        target = self._image_rect()
         visible = target.intersected(QRectF(event.rect()))
         if visible.isEmpty():
             return
         if self._image.hasAlphaChannel():
             painter.setBrushOrigin(target.topLeft())
             painter.fillRect(visible, QBrush(self._checker))
+        scale = self.zoom() / self.devicePixelRatioF()
         source = QRectF(
             (visible.x() - target.x()) / scale, (visible.y() - target.y()) / scale,
             visible.width() / scale, visible.height() / scale,

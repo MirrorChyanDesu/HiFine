@@ -6,7 +6,7 @@ from PySide6.QtCore import (
     QAbstractListModel, QItemSelectionModel, QModelIndex, QObject, QPoint, QRect,
     QRunnable, QSignalBlocker, QSize, Qt, QThreadPool, Signal, Slot,
 )
-from PySide6.QtGui import QColor, QImage, QPainter, QPen
+from PySide6.QtGui import QColor, QContextMenuEvent, QImage, QPainter, QPen
 from PySide6.QtWidgets import QListView, QStyle, QStyledItemDelegate
 
 from .controls import glyph
@@ -134,6 +134,7 @@ class _ReadThumbnail(QRunnable):
 
 class ThumbnailList(QListView):
     row_requested = Signal(int)
+    file_menu_requested = Signal(object, QPoint)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -171,9 +172,17 @@ class ThumbnailList(QListView):
         cached = self._model.images.get(row)
         if frame is not None and frame.version is not None and cached and cached[1] == frame.version:
             return
+        self._refresh_preview(row, QImage() if frame is None else None)
+
+    def invalidate_preview(self, row):
+        if row == self._source_row:
+            self._source_frame = None
+        self._refresh_preview(row, None)
+
+    def _refresh_preview(self, row, placeholder):
         if self._job is not None and self._job.row == row:
             self._job.superseded = True
-        self._model.set_preview(row, QImage() if frame is None else None)
+        self._model.set_preview(row, placeholder)
         self._load_visible()
 
     def select_row(self, row):
@@ -193,6 +202,24 @@ class ThumbnailList(QListView):
     def _current_changed(self, current, previous):
         if current.isValid():
             self.row_requested.emit(current.row())
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.RightButton:
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event):
+        if event.reason() == QContextMenuEvent.Reason.Keyboard:
+            index = self.currentIndex()
+            position = self.viewport().mapToGlobal(self.visualRect(index).center())
+        else:
+            index = self.indexAt(event.pos())
+            position = event.globalPos()
+        if not index.isValid():
+            return super().contextMenuEvent(event)
+        event.accept()
+        self.file_menu_requested.emit(self._model.files[index.row()], position)
 
     def paintEvent(self, event):
         super().paintEvent(event)

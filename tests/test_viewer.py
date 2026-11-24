@@ -3,15 +3,16 @@
 import os
 from threading import Event
 from time import monotonic, sleep
+from types import SimpleNamespace
 
 from PIL import Image
 import pytest
-from PySide6.QtCore import QPoint, QPointF, Qt
-from PySide6.QtGui import QImage, QMovie, QWheelEvent
+from PySide6.QtCore import QPoint, QPointF, Qt, QTimer
+from PySide6.QtGui import QContextMenuEvent, QImage, QMovie, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from hifine import reader
+from hifine import file_menu, reader
 from hifine.viewer import MainWindow
 
 
@@ -49,6 +50,125 @@ def thumbnail_color(row):
     preview = row.data(Qt.ItemDataRole.DecorationRole)
     if preview is not None and not preview.isNull():
         return preview.pixelColor(preview.rect().center()).name()
+
+
+def request_menu(app, widget, point):
+    app.sendEvent(widget, QContextMenuEvent(QContextMenuEvent.Reason.Mouse, point, widget.mapToGlobal(point)))
+
+
+def test_file_menu_uses_the_hit_image_and_preserves_selection(app, window, tmp_path, monkeypatch):
+    first, second = [tmp_path / f"照片 {i}.png" for i in (1, 2)]
+    for path in (first, second):
+        Image.new("RGB", (80, 60)).save(path)
+    calls = []
+    monkeypatch.setattr("hifine.viewer.show_file_menu", lambda parent, path, pos: calls.append((path, pos)))
+    window.resize(850, 600)
+    window.open_file(first)
+    finish_read(app, window)
+    canvas = window.canvas
+    center = canvas.rect().center()
+    view = window.thumbnail_list
+    other = view.visualRect(view.model().index(1, 0)).center()
+
+    request_menu(app, canvas, center)
+    QTest.mouseClick(view.viewport(), Qt.MouseButton.RightButton, pos=other)
+    request_menu(app, view.viewport(), other)
+    request_menu(app, canvas, QPoint(2, 2))
+    request_menu(app, view.viewport(), view.viewport().rect().bottomLeft())
+    assert calls == [(first, canvas.mapToGlobal(center)), (second, view.viewport().mapToGlobal(other))]
+    assert window.current_path == first
+    assert view.selectionModel().selectedIndexes() == [view.model().index(0, 0)]
+
+
+def test_canvas_menu_uses_visible_pixels_during_navigation(app, window, blocked_prefetch, monkeypatch):
+    slow, release, _ = blocked_prefetch
+    displayed = window.current_path
+    calls = []
+    monkeypatch.setattr("hifine.viewer.show_file_menu", lambda parent, path, pos: calls.append(path))
+    window.navigate(1)
+    assert window.current_path == slow
+    request_menu(app, window.canvas, window.canvas.rect().center())
+    window._show_loading()
+    request_menu(app, window.canvas, window.canvas.rect().center())
+    assert calls == [displayed]
+    release.set()
+    finish_read(app, window)
+
+
+def test_finder_menu_reveals_only_when_chosen(app, window, tmp_path, monkeypatch):
+    photo = tmp_path / "图片 #01.png"
+    photo.touch()
+    monkeypatch.setattr(file_menu, "sys", SimpleNamespace(platform="darwin"))
+    launched = []
+
+    def launch(program, args):
+        launched.append((program, args))
+        return True, 1
+
+    monkeypatch.setattr(file_menu.QProcess, "startDetached", launch)
+    pos = window.mapToGlobal(QPoint(30, 30))
+    QTimer.singleShot(0, lambda: app.activePopupWidget().close())
+    assert not file_menu.show_file_menu(window, photo, pos)
+    assert not launched
+
+    def choose_reveal():
+        menu = app.activePopupWidget()
+        menu.setActiveAction(menu.actions()[0])
+        QTest.keyClick(menu, Qt.Key.Key_Return)
+
+    QTimer.singleShot(0, choose_reveal)
+    assert file_menu.show_file_menu(window, photo, pos)
+    assert launched == [("/usr/bin/open", ["-R", str(photo)])]
+
+
+def test_rename_and_delete_after_menu_closes(app, window, tmp_path, monkeypatch):
+    first, second, renamed = [tmp_path / name for name in ("01.png", "02.png", "末尾.png")]
+    for path in (first, second):
+        Image.new("RGB", (64, 32)).save(path)
+    monkeypatch.setattr("hifine.viewer.show_file_menu", lambda *args: True)
+    window.open_file(first)
+    finish_read(app, window, prefetch=True)
+    center = window.canvas.rect().center()
+    request_menu(app, window.canvas, center)
+    first.rename(renamed)
+    wait_until(app, lambda: window.current_path == renamed and not window._reads.loading)
+    assert window.files == [second, renamed]
+    assert window.thumbnail_list.currentIndex().data() == renamed.name
+
+    upper = renamed.with_suffix(".PNG")
+    renamed.rename(upper)
+    wait_until(app, lambda: window.current_path.name == upper.name and not window._reads.loading)
+    renamed = upper
+
+    window.canvas.set_zoom(2)
+    view = window.thumbnail_list
+    request_menu(app, view.viewport(), view.visualRect(view.model().index(0, 0)).center())
+    second.unlink()
+    wait_until(app, lambda: window.files == [renamed])
+    assert window.canvas.zoom() == 2
+    request_menu(app, window.canvas, center)
+    renamed.unlink()
+    wait_until(app, lambda: window.current_path is None)
+    assert window.stage.currentWidget() is window.state
+    assert view.model().rowCount() == 0
+    assert not window.next_button.isEnabled()
+
+
+def test_menu_edit_reloads_a_replaced_file(app, window, tmp_path, monkeypatch):
+    photo = tmp_path / "照片.png"
+    Image.new("RGB", (64, 32), "red").save(photo)
+    window.open_file(photo)
+    finish_read(app, window)
+    monkeypatch.setattr("hifine.viewer.show_file_menu", lambda *args: True)
+    window._menu_refresh.setInterval(250)
+    request_menu(app, window.canvas, window.canvas.rect().center())
+    assert str(photo) in window._menu_watch.files()
+    photo.unlink()
+    wait_until(app, lambda: str(photo) not in window._menu_watch.files())
+    Image.new("RGB", (80, 40), "blue").save(photo)
+    wait_until(app, lambda: window.canvas._image.size().toTuple() == (80, 40))
+    assert window.canvas._image.pixelColor(0, 0).blue() == 255
+    assert window.current_path == photo
 
 
 def test_thumbnail_click_and_keyboard_follow_the_same_selection(app, window, tmp_path):

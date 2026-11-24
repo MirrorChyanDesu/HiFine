@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from PySide6.QtCore import QDir, QSize, QStandardPaths, Qt, QTimer, Slot
+from PySide6.QtCore import QDir, QFileSystemWatcher, QSize, QStandardPaths, Qt, QTimer, Slot
 from PySide6.QtGui import QColorSpace, QGuiApplication, QImage, QKeySequence, QMovie, QShortcut, QTransform
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
@@ -11,6 +11,8 @@ from PySide6.QtWidgets import (
 
 from .canvas import ImageCanvas
 from .controls import ElidedLabel, InfoPanel, divider, glyph, tool_button
+from .file_menu import show_file_menu
+from .image_cache import image_version
 from .imaging import SUPPORTED_EXTENSIONS
 from .reader import ImageReader
 from .thumbnails import ThumbnailList
@@ -68,6 +70,14 @@ class MainWindow(QMainWindow):
         self._direction = 1
         self._reads = ImageReader(self)
         self._reads.ready.connect(self._read_finished)
+        self._reads.folder_rescanned.connect(self._menu_folder_rescanned)
+        self._menu_watch = QFileSystemWatcher(self)
+        self._menu_watch.fileChanged.connect(self._menu_file_changed)
+        self._menu_refresh = QTimer(self, singleShot=True, interval=80)
+        self._menu_refresh.timeout.connect(self._rescan_menu_folder)
+        self._menu_watch.directoryChanged.connect(lambda _: self._menu_refresh.start())
+        self._menu_versions = {}
+        self._menu_scan = None
         QApplication.instance().aboutToQuit.connect(self._reads.shutdown)
         self._movie = None
         self._movie_orientation = 1
@@ -76,7 +86,7 @@ class MainWindow(QMainWindow):
         self._loading_hint.setInterval(150)
         self._loading_hint.timeout.connect(self._show_loading)
         self._had_maximized = False
-        self._has_image = False
+        self._displayed_path = None
         self._setup_view()
         self._setup_shortcuts()
         self._show_state("打开一张图片", "也可以将图片拖到这里。", open_button=True)
@@ -132,10 +142,12 @@ class MainWindow(QMainWindow):
         body.setSpacing(0)
         self.thumbnail_list = ThumbnailList()
         self.thumbnail_list.row_requested.connect(self._go_to)
+        self.thumbnail_list.file_menu_requested.connect(self._show_file_menu)
         QApplication.instance().aboutToQuit.connect(self.thumbnail_list.shutdown)
         body.addWidget(self.thumbnail_list)
         self.stage = QStackedWidget()
         self.canvas = ImageCanvas()
+        self.canvas.file_menu_requested.connect(lambda pos: self._show_file_menu(self._displayed_path, pos))
         self.stage.addWidget(self.canvas)
         self.state = QWidget()
         self.state.setObjectName("state")
@@ -269,12 +281,105 @@ class MainWindow(QMainWindow):
         self.state_description.setVisible(bool(description))
         self.state_button.setVisible(open_button)
         self.stage.setCurrentWidget(self.state)
-        self._has_image = False
+        self._displayed_path = None
         self._set_zoom_enabled(False)
 
     def _set_zoom_enabled(self, enabled):
         for button in (self.zoom_button, self.fit_button, self.minus_button, self.plus_button):
             button.setEnabled(enabled)
+
+    def _show_file_menu(self, path, position):
+        if path is None:
+            return
+        version = image_version(path)
+        if not show_file_menu(self, path, position):
+            return
+        if self.current_path and path.parent == self.current_path.parent:
+            # Shell commands can finish after the menu closes, e.g. Explorer's rename editor.
+            if str(path.parent) not in self._menu_watch.directories():
+                self._menu_watch.addPath(str(path.parent))
+            self._menu_versions[path] = version
+            self._menu_file_changed(str(path))
+            self._menu_refresh.start()
+
+    def _menu_file_changed(self, filename):
+        path = Path(filename)
+        if path not in self._menu_versions or path not in self.files:
+            return
+        previous = self._menu_versions[path]
+        if filename not in self._menu_watch.files():
+            self._menu_watch.addPath(filename)
+        version = image_version(path)
+        if version is None:
+            self._menu_refresh.start()
+            return
+        self._menu_versions[path] = version
+        if version != previous:
+            if path == self.current_path:
+                self._schedule_read(path, scan=False)
+            else:
+                self.thumbnail_list.invalidate_preview(self.files.index(path))
+
+    def _rescan_menu_folder(self):
+        if self.current_path is not None:
+            self._menu_scan = self._reads.rescan_folder(
+                self.current_path, self._menu_versions.get(self.current_path), self.files)
+
+    def _menu_folder_rescanned(self, request, files, renamed):
+        if request is not self._menu_scan or self._menu_refresh.isActive():
+            return
+        self._menu_scan = None
+        known = set(files)
+        watched = {Path(name) for name in self._menu_watch.files()}
+        # Editors may remove a file before saving its replacement. Qt stops
+        # watching the removed file even when the replacement has the same name.
+        for path in self._menu_versions:
+            if path in known and path not in watched:
+                self._menu_file_changed(str(path))
+        if len(files) == len(self.files) and all(old.name == new.name for old, new in zip(self.files, files)):
+            return
+        self.files = files
+        self.thumbnail_list.set_files(files)
+        if not files:
+            self._clear_menu_watch()
+            self._reads.reset()
+            self._loading_hint.stop()
+            self._stop_animation()
+            self._index = -1
+            self.current_path = None
+            self.canvas.set_image(QImage())
+            self.info_panel.set_details(None, {})
+            self.filename.set_full_text("")
+            self.filename.setToolTip("")
+            self.setWindowTitle("HiFine")
+            self._show_state("文件夹中没有图片", open_button=True)
+            self._update_navigation()
+            return
+
+        original_path, version = request
+        if renamed:
+            self._menu_versions[renamed] = version
+            self._menu_watch.addPath(str(renamed))
+        self._menu_versions = {path: version for path, version in self._menu_versions.items() if path in known}
+        selected = renamed if renamed and self.current_path == original_path else self.current_path
+        self._index = files.index(selected) if selected in known else min(self._index, len(files) - 1)
+        path = files[self._index]
+        loading = self._reads.loading
+        if loading:
+            self._reads.reset()  # An earlier folder scan can no longer replace this list.
+        if loading or self._displayed_path is None or path.parts != self._displayed_path.parts:
+            self._schedule_read(path, scan=False)
+        else:
+            self.current_path = path
+            self._update_navigation()
+            self._reads.set_neighbors(self._neighbors())
+
+    def _clear_menu_watch(self):
+        self._menu_scan = None
+        self._menu_refresh.stop()
+        self._menu_versions.clear()
+        if paths := self._menu_watch.files() + self._menu_watch.directories():
+            self._menu_watch.removePaths(paths)
 
     def choose_file(self):
         start = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.PicturesLocation)
@@ -295,6 +400,9 @@ class MainWindow(QMainWindow):
 
     def open_file(self, path):
         path = Path(path).expanduser().absolute()
+        self._menu_scan = None
+        if self.current_path is None or self.current_path.parent != path.parent:
+            self._clear_menu_watch()
         self.thumbnail_list.set_files([])
         self.files = [path]
         self._index = 0
@@ -315,7 +423,7 @@ class MainWindow(QMainWindow):
         self._stop_animation()
         self.current_path = path
         self._update_navigation()
-        if self._has_image:
+        if self._displayed_path is not None:
             self._loading_hint.start()
         else:
             self._show_loading()
@@ -357,13 +465,14 @@ class MainWindow(QMainWindow):
             self._show_state("无法打开这张图片", error, open_button=True)
         else:
             self.stage.setCurrentWidget(self.canvas)
-            self._has_image = True
+            self._displayed_path = path
             self.canvas.set_image(frame.image)
             self._set_zoom_enabled(True)
             if details.get("animated"):
                 self._start_animation(path, details.get("animation_orientation", 1))
 
     def closeEvent(self, event):
+        self._clear_menu_watch()
         self._loading_hint.stop()
         self._reads.reset()
         self.thumbnail_list.shutdown()
